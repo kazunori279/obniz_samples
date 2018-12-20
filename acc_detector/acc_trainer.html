@@ -1,0 +1,136 @@
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://obniz.io/js/jquery-3.2.1.min.js"></script>
+  <script src="https://unpkg.com/obniz@1.14.1/obniz.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@0.14.1/dist/tf.min.js"></script>
+</head>
+<body>
+
+<script>
+
+// tensors for training and test sample/labels
+var trainSamples = [];
+var trainLabels = [];
+var testSamples = [];
+var testLabels = [];
+  
+// load CSV files and create a tensor of samples [?, 20, 4] and labels [?, 4]
+function loadCsv(logName, onehot) {
+  const csv = localStorage.getItem(logName);
+  const csvLines = csv.split(/\n/);
+  const batch = [];
+  for (var i = 0; i < csvLines.length; i++) {
+    const val = csvLines[i].split(/,/);    
+    batch.push([Number(val[0]), Number(val[1]), Number(val[2])]);  
+    if (batch.length == 20) {
+      if (Math.random() > 0.2) { // Use 20% for testing
+        trainSamples.push(tf.tensor2d(batch));
+        trainLabels.push(tf.tensor1d(onehot));
+      } else {
+        testSamples.push(tf.tensor2d(batch));
+        testLabels.push(tf.tensor1d(onehot));
+      }
+      batch.length = 0;
+    }
+  }
+  console.log("Loaded " + logName);
+}
+
+function loadAllCsvs() {
+  
+  // load CSVs
+  loadCsv("baby_still",  [1, 0, 0, 0]);
+  loadCsv("baby_cradle", [0, 1, 0, 0]);
+  loadCsv("baby_liftup", [0, 0, 1, 0]);
+  loadCsv("baby_shake",  [0, 0, 0, 1]);
+
+  // convert to a tensor
+  trainSamples = tf.stack(trainSamples);
+  trainLabels = tf.stack(trainLabels);
+  testSamples = tf.stack(testSamples);
+  testLabels = tf.stack(testLabels);
+  
+  // print content
+  console.log(trainSamples);
+  console.log(trainLabels);
+  console.log(testSamples);
+  console.log(testLabels);
+}
+
+// define the model
+function createModel() {
+
+  const model = tf.sequential();
+
+  model.add(
+    tf.layers.conv1d({
+      inputShape: [20, 3],
+      kernelSize: 10,
+      filters: 50,
+      strides: 1,
+      activation: "relu",
+      kernelInitializer: "randomNormal"
+    })
+  );
+  model.add(
+    tf.layers.maxPooling1d({
+      poolSize: 2, 
+      strides: 2
+    })
+  );
+  model.add(tf.layers.flatten());  
+  model.add(tf.layers.dropout({ rate: 0.3 }));
+  model.add(
+    tf.layers.dense({
+      units: 4,
+      kernelInitializer: "randomNormal",
+      activation: "softmax"
+    })
+  );
+  return model;
+}
+
+// train the model
+async function train() {
+
+  // optimizer and loss
+  const LEARNING_RATE = 0.01;
+  const optimizer = tf.train.sgd(LEARNING_RATE);
+  const model = createModel();
+  model.compile({
+    optimizer: optimizer,
+    loss: "categoricalCrossentropy",
+    metrics: ["accuracy"]
+  });
+  model.summary();
+
+  // train until accuracy reaches to 98%
+  console.log("\nStart training...");
+  for (var acc = 0; acc < 0.98; ) {
+    const h = await model.fit(trainSamples, trainLabels, {
+      epochs: 50,
+      shuffle: true,
+    });
+    const evalResult = model.evaluate(testSamples, testLabels);
+    const loss = evalResult[0].dataSync()[0];
+    acc = evalResult[1].dataSync()[0];
+    console.log("loss: " + loss.toFixed(2) + ", acc: " + acc.toFixed(2));
+  }
+  
+  // save
+  await model.save("localstorage://baby_model_1");
+  console.log("Training finished.");
+}
+
+// prepare samples and model
+loadAllCsvs();
+
+// train
+train();
+
+
+</script>
+</body>
+</html>

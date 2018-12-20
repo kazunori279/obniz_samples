@@ -1,0 +1,122 @@
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://obniz.io/js/jquery-3.2.1.min.js"></script>
+  <script src="https://unpkg.com/obniz@1.14.1/obniz.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@0.14.1/dist/tf.min.js"></script>
+</head>
+<body>
+
+<script>
+  
+  const IMG_BASE_URL = "https://raw.githubusercontent.com/kazunori279/obniz_samples/master/acc_detector/img/";
+  const IMG_AWAKE = ["eyes_awake0.png", "eyes_awake1.png", "eyes_awake2.png", "eyes_awake3.png"];
+  const IMG_HAPPY = ["eyes_happy0.png"];
+  const IMG_ANGER = ["eyes_anger0.png"];
+  const IMG_SAD = ["eyes_sad0.png", "eyes_sad1.png", "eyes_sad2.png"];
+  const IMG_SLEEP = ["eyes_sleep0.png", "eyes_sleep1.png", "eyes_sleep2.png"];
+  const IMG_WOW = ["eyes_wow0.png", "eyes_wow1.png"];
+  const eyes = new Object();
+  var numLoading = 0;
+  
+  async function loadEyeImages() {
+    const imgLoader = (f) => {
+      numLoading ++;
+      const img = new Image();
+      img.crossOrigin = "Anonymous";
+      img.src = IMG_BASE_URL + f;
+      img.onload = () => { 
+        console.log("Loaded: " + f);
+        numLoading--;
+      };
+      return img;
+    };
+    eyes["awake"] = IMG_AWAKE.map(imgLoader);
+    eyes["happy"] = IMG_HAPPY.map(imgLoader);
+    eyes["anger"] = IMG_ANGER.map(imgLoader);
+    eyes["sad"] = IMG_SAD.map(imgLoader);
+    eyes["sleep"] = IMG_SLEEP.map(imgLoader);
+    eyes["wow"] = IMG_WOW.map(imgLoader);
+    while (numLoading > 0) {
+      await obniz.wait(100);
+    }
+    console.log("Image loading finished.");
+  }
+
+  // classify motion and show emotion
+  function classifyMotion(values) {
+    
+    // classify motion (0: cradling, 1: lift up, 2: shaking)
+    const input = tf.tensor3d([values], [1, 20, 3]);
+    const p = model.predict(input).dataSync();
+        
+    // find max probability
+    var max = 0;
+    var iMax = 0;
+    for (var i = 0; i < p.length; i++) {
+      if (p[i] > max) {
+        max = p[i];
+        iMax = i;
+      }
+    }
+    const motion = p[iMax] > 0.6 ? iMax : null;
+
+    // map motion to emotion
+    if (motion === null) {
+      emotion = "awake";
+    } else if (motion === 0) {
+      emotion = "sad";
+    } else if (motion === 1) {
+      emotion = "sleep";
+    } else if (motion === 2) {
+      emotion = "happy";
+    } else if (motion === 3) {
+      emotion = "wow";
+    }
+    const prob = motion != null ? p[iMax].toFixed(2) : "N/A";
+    console.log("emotion: " + emotion + ", prob = " + prob);
+
+    // display eyes
+    const r = Math.floor(Math.random() * eyes[emotion].length);
+    ctx.drawImage(eyes[emotion][r], 0, 0);
+    obniz.display.draw(ctx);
+  }
+
+  // init obniz
+  const obniz = new Obniz("<OBNIZ_ID>");
+  var ctx;
+  var sensor;
+  var model;
+  
+  obniz.onconnect = async () => {
+    
+    // get canvas and load eye images
+    ctx = obniz.util.createCanvasContext(obniz.display.width, obniz.display.height);
+    await loadEyeImages();
+    
+    // init acc sensor
+    sensor = obniz.wired("KXR94-2050", { vcc:5, enable:6, gnd:7, z:8, y:9, x:10, self_test:11 });
+    
+    // load model
+    model = await tf.loadModel("localstorage://baby_model_0");
+    
+    // start detection
+    const values = [];
+    obniz.repeat(() => {
+      
+      // collect sensor data
+      const v = sensor.get();
+      values.push([v.x, v.y, v.z]);      
+      
+      // classify the motion at every 20 samples
+      if (values.length === 20) {
+        classifyMotion(values);
+        values.length = 0;
+      }
+    });
+  }
+
+</script>
+</body>
+</html>

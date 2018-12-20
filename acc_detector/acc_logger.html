@@ -1,0 +1,159 @@
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://obniz.io/js/jquery-3.2.1.min.js"></script>
+  <script src="https://unpkg.com/obniz@1.14.1/obniz.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/89/three.min.js"></script>
+</head>
+
+<body>
+  <script>
+    
+    window.addEventListener('load', initGraph);
+    var dataLines;
+    
+    // init graph UI
+    function initGraph() {
+
+      // Three.js setup
+      const width = 450;
+      const height = 450;
+      const renderer = new THREE.WebGLRenderer({
+        canvas: document.querySelector('#myCanvas')
+      });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(width, height);
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(45, width / height);
+      camera.position.set(0, 0, 30);
+
+      // draw axis lines
+      var axisMat = new THREE.LineBasicMaterial({
+	    color: 0xffffff
+      });      
+      var axis = new THREE.Geometry();
+      axis.vertices.push(new THREE.Vector3( 0, 0, 0));
+      axis.vertices.push(new THREE.Vector3( 10, 0, 0));
+      axis.vertices.push(new THREE.Vector3( 0, 0, 0));
+      axis.vertices.push(new THREE.Vector3( 0, 10, 0));
+      axis.vertices.push(new THREE.Vector3( 0, 0, 0));
+      axis.vertices.push(new THREE.Vector3( 0, 0, 10));
+      var axisLines = new THREE.Line(axis, axisMat);
+      scene.add(axisLines);
+      
+      // draw data lines
+      var dataMat = new THREE.LineBasicMaterial({
+	    color: 0xffffff, 
+        vertexColors: THREE.VertexColors,
+        linewidth: 5
+      });
+      dataLines = new THREE.Line( new THREE.Geometry(), dataMat);
+      scene.add(dataLines);
+
+      // rendering
+      tick();
+      function tick() {     
+        dataLines.rotation.x += 0.002;
+        dataLines.rotation.y += 0.001;
+        dataLines.rotation.z += 0.001;
+        axisLines.rotation.x += 0.002;
+        axisLines.rotation.y += 0.001;
+        axisLines.rotation.z += 0.001;
+        renderer.render(scene, camera);
+        requestAnimationFrame(tick);
+      }
+    }
+    
+    // init obniz
+    var obniz = new Obniz("<OBNIZ_ID>");
+    var sensor;
+    var isLogging = false;
+    obniz.onconnect = async function () {
+      
+      // init acc sensor
+      sensor = obniz.wired("KXR94-2050", { vcc:5, enable:6, gnd:7, z:8, y:9, x:10, self_test:11 });
+
+      // start and stop button
+      $("#start").on("click", function () {
+        $("#start").prop("disabled", true);
+        $("#stop").prop("disabled", false);
+        isLogging = true;
+        console.log("Logging started.");
+      });
+      $("#stop").on("click", function () {
+        $("#start").prop("disabled", false);
+        $("#stop").prop("disabled", true);
+        isLogging = false;
+        console.log("Logging stopped.");
+        var log_name = $("#log_name").val();
+        storeLogs(log_name);
+      });    
+      $("#print").on("click", function () {
+        var log_name = $("#log_name").val();
+        console.log("Log: " + log_name);
+        console.log(localStorage.getItem(log_name));
+      });
+    }
+    
+    // data logging
+    var vals = [];
+    var vals_csv = "";
+    obniz.repeat(async function () {
+
+      // data collection
+      var v = sensor.get();
+      vals.push(v);
+      if (isLogging) {
+        vals_csv += v.x.toFixed(2) + "," + v.y.toFixed(2) + "," + v.z.toFixed(2) + "\n";
+      }
+      if (vals.length > 10) vals.shift();
+      
+      // render data lines
+      if (dataLines && sensor) {
+        
+        // convert to vertices
+        var vertices = [];
+        for (var i = 0; i < vals.length; i++) {
+          vertices.push(new THREE.Vector3(
+              (vals[i].x + 0.25) * -20, 
+              (vals[i].y - 0.68) * 20, 
+              (vals[i].z - 0.06) * -20));          
+        }
+
+        // convert to line geometry and colors
+        const len = 50;
+        if (vertices.length == 10) {
+          var spline = new THREE.CatmullRomCurve3(vertices);
+          var geo = new THREE.Geometry().setFromPoints(spline.getPoints(len));
+          for (var i = 0; i < len * 2; i += 2) {
+            var dim = i / len;
+            geo.colors[i] = new THREE.Color(dim, dim, 0);
+            geo.colors[i+1] = geo.colors[i];
+          }
+          dataLines.geometry = geo;
+        }
+      }
+    });
+    
+    function storeLogs(log_name) {
+      localStorage.setItem(log_name, vals_csv);
+      var lines = vals_csv.split(/\n/).length;
+      console.log("Saved " + log_name + " with " + lines + " records.");
+      vals_csv = "";
+    }
+    
+  </script>
+  
+  <h3>Acc logger</h3>
+  
+  <canvas id="myCanvas"></canvas><br/><br/>
+  
+  Log name: <input id="log_name" type="text"></input>
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+  <button id="print">Print</button>
+
+</body>  
+  
+</html>
