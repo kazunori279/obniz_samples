@@ -1,0 +1,282 @@
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://obniz.io/js/jquery-3.2.1.min.js"></script>
+  <script src="https://unpkg.com/obniz@1.14.1/obniz.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="obniz-debug"></div>
+
+<script>
+  
+  // NOTE:
+  // This code requires a Chrome browser and CORS chrome extension 
+  // to set Access-Control-Allow-Origin header to "*".
+    
+  // obniz key
+  const OBNIZ_ID = "<YOUR OBNIZ ID>";
+
+  // weather forecast settings
+  const DARKSKY_KEY = "<YOUR DARKSKY KEY>";
+  const FORECAST_LOCATION = "35.681167,139.767052"; // Tokyo
+
+  // brightness settings
+  const LED_BRIGHTNESS = 0.9;
+  const LED_LIGHT_SENSOR = true; // true if light sensor is available
+  const LED_SLEEP_BRIGHTNESS = 0.1; // turn off LED if the room is too dark (set 0 to disable)
+    
+  // color settings in HSV
+  const COLOR_NONE = [0, 0, 0]; // black
+  const COLOR_HOUR = [0, 1, 0.05]; // hour hand
+  const COLOR_MIN = [null, null, 0]; // minute hand (null = use the old value)
+  const COLOR_SEC = [null, null, 0.01]; // second hand
+  const COLOR_PRECIP = [220, 0.8, 0.07]; // color for rainy weather
+  const COLOR_CLEAR = [110, 0.6, 0.07]; // color for clear weather
+  const COLOR_ST = [COLOR_NONE, COLOR_HOUR, COLOR_MIN, COLOR_SEC];
+    
+  // devices
+  var obniz;
+  var led;
+    
+  // ring colors and status
+  var forecast;
+  var ringColors = [];
+  var ringStatusOld = [];
+  var ringStatusNew = [];
+  var envBrightness = [];
+  var ringBrightness = 0;
+  const ST_NONE = 0;
+  const ST_HOUR = 1;
+  const ST_MIN = 2;
+  const ST_SEC = 3;
+  const ST_WEATHER = 4;
+
+  // timer
+  var lastSecPos;
+  var lastHourPos;
+  var tick = 0;
+
+  async function loop() {
+
+    measureEnvBrightness();
+    
+    // check if sec has changed
+    if (lastSecPos != getSecPos()) {
+      
+      // update ring brightness
+      updateRingBrightness();
+    
+      // reset tick every second
+      tick = 0;
+      lastSecPos = getSecPos();
+  
+      // update ring status
+      for (i = 0; i < 60; i++) {
+        ringStatusOld[i] = ringStatusNew[i];
+        ringStatusNew[i] = ST_WEATHER;
+      }
+  //    ringStatusNew[0] = ST_NONE;
+      ringStatusNew[getSecPos()] = ST_SEC;
+      ringStatusNew[getMinPos()] = ST_MIN;
+      ringStatusNew[getHourPos()] = ST_HOUR;
+    }
+    tick++;
+
+    // if hour has changed, update forecast data
+    if (lastHourPos != getHourPos()) {
+      lastHourPos = getHourPos();
+      updateForecast(false);
+    }
+    
+    // transition during 0 <= tick < 10
+    if (tick > 10) return;
+    
+    // transition
+    var ratio = tick / 10.0;
+    var ratioR = (10 - tick) / 10.0;  
+    var colors = [];
+    for (var i = 0; i < 60; i++) {
+      
+      // get old and new colors based on their status
+      var oldColor = ringColors[i];
+      if (ringStatusOld[i] && ringStatusOld[i] != ST_WEATHER) {
+        oldColor = COLOR_ST[ringStatusOld[i]];
+      }
+      var newColor = ringColors[i];
+      if (ringStatusNew[i] && ringStatusNew[i] != ST_WEATHER) {
+        newColor = COLOR_ST[ringStatusNew[i]];
+      }
+      
+      // calculate HSV value with the ratio
+      var h = (oldColor[0] != null) && (newColor[0] != null) ? (oldColor[0] * ratioR) + (newColor[0] * ratio) : 
+        oldColor[0] ? oldColor[0] : newColor[0];
+      var s = (oldColor[1] != null) && (newColor[1] != null) ? (oldColor[1] * ratioR) + (newColor[1] * ratio) :
+        oldColor[1] ? oldColor[1] : newColor[1];
+      var v = (oldColor[2] != null) && (newColor[2] != null) ? (oldColor[2] * ratioR) + (newColor[2] * ratio) :
+        oldColor[2] ? oldColor[2] : newColor[2];
+      
+      colors.push([h, s, v * ringBrightness]);
+    }
+    
+    // show the colors on LED
+    led.hsvs(colors);
+    await obniz.wait(10);
+  }
+    
+  function getSecPos() {
+    return (new Date()).getSeconds();
+  }
+    
+  function getMinPos() {
+    return (new Date()).getMinutes();
+  }
+    
+  function getHourPos() {
+    return ((new Date()).getHours() % 12) * 5;
+  }
+    
+  function callWeatherApi() {
+
+    url = "https://api.darksky.net/forecast/" + DARKSKY_KEY + "/" + FORECAST_LOCATION + "?exclude=minutely,daily,alerts,flags&units=si";
+    $.ajax({
+      type: "GET",
+      scriptCharset: "utf-8",
+      dataType:"json",
+      crossDomain: true,
+      async: false,
+      url: url,
+    }).done(function(res) {
+      console.log(res);
+      forecast = res;
+    }).fail(function(xhr, status, error) {
+      console.log(xhr + status + error);
+    });
+  }
+
+  function updateForecast(isCallApi) {
+    
+    // call weather API if needed
+    if (isCallApi) {
+      callWeatherApi();
+    }
+          
+    // decode forecast and calc colors of each hour
+    var colorsByHour = [];
+    for (var i = 0; i < forecast.hourly.data.length; i++) {
+      
+      // get hour offset for each forecast
+      var hForecast = forecast.hourly.data[i];
+      var hour = Math.floor(((Number(hForecast.time) - (Date.now() / 1000)) / (60 * 60)) + 1);
+      if (hour < 0) continue;
+      
+      // for the current hour, replace with currently forecast
+      if (hour == 0) {
+        var hForecast = forecast.currently;
+      }
+      
+      // decode precip and clearness
+      var precip = Math.min(hForecast.precipIntensity, 1.0);
+      var clearness = 1.0 - (Math.min(Number(hForecast.cloudCover) * 1.5, 1.0));
+      
+      // determine colors
+      if (precip < 0.1 && clearness > 0) {
+        colorsByHour[hour] = [COLOR_CLEAR[0], COLOR_CLEAR[1] * clearness, COLOR_CLEAR[2]];
+      } else {
+        colorsByHour[hour] = [COLOR_PRECIP[0], COLOR_PRECIP[1] * precip, COLOR_PRECIP[2]];
+      }
+    }
+
+    // update ring colors with smoothing
+    for (var hour = 0; hour < 12; hour++) {
+      var colorFrom = colorsByHour[hour];
+      var colorTo = colorsByHour[hour + 1];    
+      for (var i = 0; i < 5; i++) {
+        var ratio = i / 5.0;
+        var h = (colorFrom[0] * (1 - ratio)) + (colorTo[0] * ratio);
+        var s = (colorFrom[1] * (1 - ratio)) + (colorTo[1] * ratio);
+        var v = (colorFrom[2] * (1 - ratio)) + (colorTo[2] * ratio);
+        var pos = (getHourPos() + (hour * 5) + i) % 60;
+        ringColors[pos] = [h, s, v];
+      }
+    }
+  }
+    
+  // measure env brightness
+  async function measureEnvBrightness() {
+    if (!LED_LIGHT_SENSOR) return;
+    var v = await obniz.ad9.getWait();
+    envBrightness.push(v ? v : 0);
+    while (envBrightness.length > 50) envBrightness.shift(); // Retain last 50 samples (5 sec)
+  }
+
+  // update ring brightness
+  async function updateRingBrightness() {
+
+    // calc average of sensor input
+    if (!LED_LIGHT_SENSOR) return;
+    var sum = 0;
+    for (var i = 0; i < envBrightness.length; i++) {
+      sum = sum + Number(envBrightness[i]);
+    }
+    var sensor = (sum / envBrightness.length) * 1000 / 100;
+  //  console.log(sensor);
+    
+    // calc env brightness (apply Math.log for daylight)
+    var env = sensor > 1 ? Math.log(sensor + Math.E - 1) * 0.5 + 0.5 : sensor * 0.7 + 0.3;
+    env = Math.min(env, 2.0);
+  //  console.log(env);
+    
+    // turn off LED if it's too dark
+    if (sensor > LED_SLEEP_BRIGHTNESS) {
+      ringBrightness = env * LED_BRIGHTNESS;
+    } else {
+      ringBrightness = 0;
+    }
+  }
+
+  // init
+  obniz = new Obniz(OBNIZ_ID);
+  obniz.onconnect = async function () {
+
+    // init LED I/O
+    led = obniz.wired("WS2812", {din: 0});
+    console.log("LED initialized.");
+    
+    // init light sensor and ring brightness
+    if (LED_LIGHT_SENSOR) {
+      obniz.io11.output(true);
+      obniz.io10.output(false);
+      console.log("Light sensor initialized.");
+    }
+    updateRingBrightness();
+
+    // error handler
+    var _error = obniz.error;
+    obniz.error = async function(obj){
+      _error(obj);
+      obniz.reset();
+      console.log("obniz reset.");
+      await obniz.wait(60000); // wait for a while before resetting again
+    }
+
+    // init weather api
+    updateForecast(true);
+    setInterval(async function() {
+      updateForecast(true);
+    }, 1000 * 60 * 15); // every 15 min
+    
+    // start event loop
+    lastSecPos = getSecPos();
+    lastHourPos = getHourPos();
+    obniz.repeat(async function() {
+      loop();
+    });
+    console.log("Clock initialized.");
+    
+  }
+
+</script>
+</body>
+</html>
