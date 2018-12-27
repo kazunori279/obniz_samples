@@ -1,0 +1,117 @@
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://obniz.io/js/jquery-3.2.1.min.js"></script>
+  <script src="https://unpkg.com/obniz@1.14.1/obniz.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="obniz-debug"></div>
+  
+<script>
+  
+  const obniz_ids = [<LIST OF YOUR OBNIZ IDS>>];
+
+  const DARKSKY_KEY = "<YOUR DARKSKY KEY>";
+  const FORECAST_LOCATION = "35.681167,139.767052"; // Tokyo
+
+  var forecast = "";
+  var temp = 0;
+  var humidity = 0;
+  var precip = 0;
+    
+  // dict for mapping weather code to icon
+  var wDict = new Object();
+  wDict['clear-day']='☀';
+  wDict['clear-night']='☀';
+  wDict['rain']='☂';
+  wDict['snow']='☃';
+  wDict['sleet']='☂';
+  wDict['wind']='風';
+  wDict['fog']='霧';
+  wDict['cloudy']='☁';
+  wDict['partly-cloudy-day']='☁';
+  wDict['partly-cloudy-night']='☁';
+
+  // formatting current time to string
+  function getTime() {
+    var nowTime = new Date();
+    var nowHour = ('  ' + nowTime.getHours()).slice(-2);
+    var nowMin  = ('00' + nowTime.getMinutes()).slice(-2);
+    return nowHour + ":" + nowMin;
+  }
+
+  // update obniz display
+  function updateDisplay(obniz){
+    obniz.display.clear();
+    obniz.display.font('arial black', 40);
+    obniz.display.print(getTime());
+    obniz.display.font('arial', 2);
+    obniz.display.print('');
+    obniz.display.font('arial narrow', 20);
+    obniz.display.print(temp + 'C ' + humidity + '% ' + forecast + ' ' + precip + '%');
+  }
+
+  // call darksky API and decode the result
+  function callWeatherApi() {
+    url = "https://api.darksky.net/forecast/" + DARKSKY_KEY + "/" + FORECAST_LOCATION + "?exclude=minutely,daily,alerts,flags&units=si";
+    $.ajax({
+      type: "GET",
+      scriptCharset: "utf-8",
+      dataType:"json",
+      crossDomain: true,
+      async: false,
+      url: url,
+    }).done(function(data) {
+      
+      // decode weather forecast
+      console.log(data);
+      forecast = data.hourly.icon;
+      if (wDict[forecast]) forecast = wDict[forecast];
+      temp = Math.round(data.currently.temperature);
+      humidity = Math.round(data.currently.humidity * 100);
+      precip = 0;
+      for (var i = 0; i < 12; i++) {
+        precip = Math.max(precip, data.hourly.data[i].precipProbability * 100);
+      }
+      precip = Math.round(precip);
+      
+    }).fail(function(xhr, status, error) {
+      console.log(xhr);
+      console.log(status);
+      console.log(error);
+    });
+  }
+    
+  // init weather api
+  callWeatherApi();
+  setInterval(async function() {
+    callWeatherApi();
+  }, 1000 * 60 * 15); // every 15 min
+  console.log("Weather API initialized.");
+
+  // connect to obniz
+  obniz_list = [];
+  for (var oid of obniz_ids) {
+    obniz_list.push(new Obniz(oid));
+  }
+
+  // update display every 30
+  setInterval(async function() {
+    for (var obniz of obniz_list) {
+      updateDisplay(obniz);
+    }
+  }, 1000 * 30);
+
+  // init display
+  for (var obniz of obniz_list) {
+    obniz.onconnect = function() {
+      updateDisplay(obniz);
+    };
+    console.log("Obniz initialized: " + obniz.id);
+  }
+
+</script>
+</body>
+</html>
